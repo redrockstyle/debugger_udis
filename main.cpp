@@ -26,19 +26,19 @@ int main() {
 	else {
 		for (i = 1; i < nArgs; i++) {
 			if (sArgs[i]) {
-				if (wcscmp(sArgs[i], L"-t") == 0) {
+				if (wcscmp(sArgs[i], L"-t") == 0) { // base tracing
 					configDbg.tracing = 1;
 				}
 				else if (wcscmp(sArgs[i], L"-b") == 0) {
 					configDbg.baseTracing = 1;
 				}
-				else if (wcscmp(sArgs[i], L"-f") == 0) {
+				else if (wcscmp(sArgs[i], L"-f") == 0) { // func tracing
 					configDbg.functions = 1;
 				}
-				else if (wcscmp(sArgs[i], L"-l") == 0) {
+				else if (wcscmp(sArgs[i], L"-l") == 0) { // lib tracing
 					configDbg.libraries = 1;
 				}
-				else if (wcscmp(sArgs[i], L"-i") == 0) {
+				else if (wcscmp(sArgs[i], L"-i") == 0) { // select target
 					if (sArgs[i + 1]) {
 						++i;
 						if (isNumb(sArgs[i])) {

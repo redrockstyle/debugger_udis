@@ -2,13 +2,27 @@
 #define _DBG_H_
 
 #include <Windows.h>
+#ifdef _AMD64_
+#define EAX Rax
+#define EIP Rip
+#define ESP Rsp
+#include <ntstatus.h>
+#else
+#define EAX Eax
+#define EIP Eip
+#define ESP Esp
+#endif
 
 #include <filesystem>
 #include <iostream>
+#include <fstream>
 #include <vector>
 #include <map>
 
+
 #include "disas.h"
+
+
 
 typedef struct _DbgConfig {
 	bool baseTracing;
@@ -17,25 +31,23 @@ typedef struct _DbgConfig {
 	bool libraries;
 }DbgConfig, * PDbgConfig;
 
-typedef enum _BreakPointType {
+enum class BreakPointType {
 	TRACING_FUNCTION_BREAKPOINT = 0,
 	SAVE_BREAKPOINT,
 	INITIAL_BREAKPOINT,
 	FUNCTION_RETURN_BREAKPOINT,
 	LIB_FUNCTION_BREAKPOINT
-} BreakPointType;
+};
 
 typedef struct _BreakPoint {
 	unsigned char save;
 	void* address;
 	BreakPointType type;
-	struct _BreakPoint* prev;
 } BreakPoint, * PBreakPoint;
 
 class Debugger {
 private:
 	struct _DbgConfig config;
-
 	HANDLE debugProcess;
 	std::vector<DWORD> threads;
 	std::map<void*, BreakPoint> breakpoints;
@@ -51,12 +63,19 @@ private:
 	DWORD EventException(DWORD pid, DWORD tid, LPEXCEPTION_DEBUG_INFO exceptionDebugInfo);
 
 
-	//void SetBreakpoint(void* addr, BreakPointType type, BreakPoint* prev);
+	void SetBreakpoint(void* addr, BreakPointType type);
+	void RemoveBreakpoint(void* addr, unsigned int tid, bool ifTrace);
+	void SetTraceFlag(HANDLE& thread);
+	void SetThreadContextToBreakpoint(HANDLE& thread, PVOID& exception_address, unsigned char saveByte, CONTEXT& _ctx);
+
+	void PrintRegs(CONTEXT* ctx);
 
 public:
+	std::ofstream debugStream;
 	Debugger() {
 		debugProcess = nullptr;
 		config = { 0 };
+		debugStream = std::ofstream("debugInfo.txt", std::ios::out);
 	};
 	void InitFlags(PDbgConfig cfg);
 	bool InitProcess(const unsigned int pid);
