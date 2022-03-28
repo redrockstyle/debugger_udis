@@ -5,6 +5,9 @@
 
 void Debugger::InitFlags(PDbgConfig cfg) {
 	std::memcpy(&this->config, cfg, sizeof(DbgConfig));
+	std::cout << "FLAGS FUNC:" << this->config.functions
+		<< "\tLIB:" << this->config.libraries
+		<< "\tTRACE:" << this->config.tracing << std::endl;
 	return;
 }
 bool Debugger::InitProcess(const unsigned int pid) {
@@ -43,6 +46,7 @@ bool Debugger::InitProcess(const std::wstring& path) {
 		NULL,
 		TRUE,
 		DEBUG_ONLY_THIS_PROCESS,
+		//DEBUG_PROCESS | INHERIT_PARENT_AFFINITY,
 		NULL,
 		NULL,
 		&startup_info,
@@ -73,6 +77,9 @@ void Debugger::StartDebugging() {
 		switch (debugEvent.dwDebugEventCode) {
 		case CREATE_PROCESS_DEBUG_EVENT:
 			EventCreateProcess(debugEvent.dwProcessId, debugEvent.dwThreadId, &debugEvent.u.CreateProcessInfo);
+			if (this->config.functions) {
+				SetTracingFunctionsBreakpoints(debugEvent.dwThreadId);
+			}
 #if _WIN64
 			SetBreakpoint((char*)debugEvent.u.CreateProcessInfo.lpStartAddress, BreakPointType::INITIAL_BREAKPOINT);
 #else
@@ -129,8 +136,8 @@ void Debugger::StartDebugging() {
 }
 
 void Debugger::EventCreateProcess(DWORD pid, DWORD tid, LPCREATE_PROCESS_DEBUG_INFO procDebugInfo) {
-	std::cout << "Create process\t\tPID:" << pid;
-	std::cout << "\tTID:" << tid << std::endl;
+	std::cout << "Create process\t\tPID:" << std::dec << pid;
+	std::cout << "\tTID:" << std::dec << tid << std::endl;
 	std::cout << "ImgName:0x" << std::hex << procDebugInfo->lpImageName;
 	std::cout << "\tBase:0x" << std::hex << procDebugInfo->lpBaseOfImage;
 	std::cout << "\tStart:0x" << procDebugInfo->lpStartAddress << std::endl;
@@ -140,7 +147,7 @@ void Debugger::EventCreateProcess(DWORD pid, DWORD tid, LPCREATE_PROCESS_DEBUG_I
 }
 
 void Debugger::EventExitProcess(DWORD pid, DWORD tid, LPEXIT_PROCESS_DEBUG_INFO procDebugInfo) {
-	std::cout << "Exit process code:" << procDebugInfo->dwExitCode;
+	std::cout << "Exit process code:" << std::hex << procDebugInfo->dwExitCode;
 	std::cout << "\tPID:" << std::dec << pid;
 	std::cout << "\tTID:" << std::dec << tid << std::endl;
 	return;
@@ -156,7 +163,7 @@ void Debugger::EventCreateThread(DWORD pid, DWORD tid, LPCREATE_THREAD_DEBUG_INF
 }
 
 void Debugger::EventExitThread(DWORD pid, DWORD tid, LPEXIT_THREAD_DEBUG_INFO threadDebugInfo) {
-	std::cout << "Exit thread code:" << threadDebugInfo->dwExitCode;
+	std::cout << "Exit thread code:" << std::hex << threadDebugInfo->dwExitCode;
 	std::cout << "\tPID:" << std::dec << pid;
 	std::cout << "\tTID:" << std::dec << tid << std::endl;
 
@@ -191,8 +198,8 @@ void Debugger::EventLoadDll(DWORD pid, DWORD tid, LPLOAD_DLL_DEBUG_INFO dllDebug
 
 void Debugger::EventUnloadDll(DWORD pid, DWORD tid, LPUNLOAD_DLL_DEBUG_INFO dllDebugInfo) {
 	std::cout << "Unload dll:" << dllDebugInfo->lpBaseOfDll;
-	std::cout << "\tPID:" << std::hex << pid;
-	std::cout << "\tTID:" << std::hex << tid << std::endl;
+	std::cout << "\tPID:" << std::dec << pid;
+	std::cout << "\tTID:" << std::dec << tid << std::endl;
 
 	//lib_tracing breakpoints
 
@@ -201,16 +208,16 @@ void Debugger::EventUnloadDll(DWORD pid, DWORD tid, LPUNLOAD_DLL_DEBUG_INFO dllD
 }
 
 void Debugger::EventOutputDebugString(DWORD pid, DWORD tid, LPOUTPUT_DEBUG_STRING_INFO debugStringInfo) {
-	std::string debugString = std::string(debugStringInfo->nDebugStringLength, 0);
+	std::string dbgString = std::string(debugStringInfo->nDebugStringLength, 0);
 	ReadProcessMemory(
 		this->debugProcess,
 		debugStringInfo->lpDebugStringData,
-		&debugString,
+		&dbgString,
 		debugStringInfo->nDebugStringLength,
 		nullptr
 	);
 
-	std::cout << "Debug string:" << debugString;
+	std::cout << "Debug string:" << dbgString;
 	std::cout << "\tPID:" << std::hex << pid;
 	std::cout << "\tTID:" << std::hex << tid << std::endl;
 	return;
@@ -218,10 +225,11 @@ void Debugger::EventOutputDebugString(DWORD pid, DWORD tid, LPOUTPUT_DEBUG_STRIN
 
 DWORD Debugger::EventException(DWORD pid, DWORD tid, LPEXCEPTION_DEBUG_INFO exceptionDebugInfo) {
 
-	DWORD continueFlag = (DWORD)DBG_EXCEPTION_NOT_HANDLED;
-	
-
-	std::string assembly_string;
+	HANDLE thread;
+	CONTEXT ctx = {0};
+	char asmbuf[128] = { 0 };
+	char hexbuf[128] = { 0 };
+	unsigned char* buf;
 
 	switch (exceptionDebugInfo->ExceptionRecord.ExceptionCode)
 	{
@@ -230,19 +238,48 @@ DWORD Debugger::EventException(DWORD pid, DWORD tid, LPEXCEPTION_DEBUG_INFO exce
 	case STATUS_WX86_BREAKPOINT:
 #endif
 	{
-		//std::cout << "EXCEPTION_BREAKPOINT" << std::endl;
-		unsigned char* buf;
-		char assembly_buffer[128] = { 0 };
-		char hex_buffer[128] = { 0 };
-		RemoveBreakpoint(exceptionDebugInfo->ExceptionRecord.ExceptionAddress, tid, true);
-		buf = new unsigned char[16];
-		ReadProcessMemory(this->debugProcess, exceptionDebugInfo->ExceptionRecord.ExceptionAddress, buf, 16, nullptr);
-		DisasInstruction(buf, 16, (uint64_t)exceptionDebugInfo->ExceptionRecord.ExceptionAddress, assembly_buffer, hex_buffer);
-		std::cout << "Instruction: " << assembly_buffer << std::endl;
-		std::cout << "Exception Code: " << std::hex << exceptionDebugInfo->ExceptionRecord.ExceptionCode << std::endl;
-		delete[] buf;
-		
-		continueFlag = (DWORD)DBG_CONTINUE;
+		std::cout << "EXCEPTION_BREAKPOINT " << exceptionDebugInfo->ExceptionRecord.ExceptionAddress << std::endl;
+		auto found = this->breakpoints.find(exceptionDebugInfo->ExceptionRecord.ExceptionAddress);
+		thread = OpenThread(THREAD_GET_CONTEXT | THREAD_SET_CONTEXT, FALSE, tid);
+		if (!thread) break;
+		if (this->config.libraries) {
+
+		}
+		if (found != this->breakpoints.end() && found->second.type == BreakPointType::INITIAL_BREAKPOINT) {
+			//ctx = { 0 };
+			//ctx.ContextFlags = CONTEXT_ALL;
+			//GetThreadContext(thread, &ctx);
+			//ctx.EFlags |= 0x100;
+			//ctx.EIP--;
+			//SetThreadContext(thread, &ctx);
+
+			SetTraceFlag(thread, true);
+
+			WriteProcessMemory(this->debugProcess, (PVOID)exceptionDebugInfo->ExceptionRecord.ExceptionAddress, &found->second.save, 1, nullptr);
+			FlushInstructionCache(this->debugProcess, (PVOID)exceptionDebugInfo->ExceptionRecord.ExceptionAddress, 1);
+			this->breakpoints.erase(found);
+
+			if (this->config.tracing) {
+				//ctx.ContextFlags = CONTEXT_ALL;
+				//GetThreadContext(thread, &ctx);
+				//ctx.EFlags |= 0x100;
+				//SetThreadContext(thread, &ctx);
+
+				SetTraceFlag(thread, false);
+			}
+		}
+		else {
+			buf = new unsigned char[16];
+			ReadProcessMemory(this->debugProcess, exceptionDebugInfo->ExceptionRecord.ExceptionAddress, buf, 16, nullptr);
+			DisasInstruction(buf, 16, (uint64_t)exceptionDebugInfo->ExceptionRecord.ExceptionAddress, asmbuf, hexbuf);
+			std::cout << "Exception breakpoint @ " << exceptionDebugInfo->ExceptionRecord.ExceptionAddress << std::endl;
+			std::cout << "PID: " << pid << std::endl;
+			std::cout << "TID: " << tid << std::endl;
+			std::cout << "Instruction: " << asmbuf << std::endl;
+			std::cout << "Exception Code: " << std::hex << exceptionDebugInfo->ExceptionRecord.ExceptionCode << std::endl;
+			delete[] buf;
+		}
+		CloseHandle(thread);
 		break;
 	}
 	case (DWORD)EXCEPTION_SINGLE_STEP:
@@ -250,59 +287,94 @@ DWORD Debugger::EventException(DWORD pid, DWORD tid, LPEXCEPTION_DEBUG_INFO exce
 	case STATUS_WX86_SINGLE_STEP:
 #endif
 	{
-		//std::cout << "EXCEPTION_SINGLE_STEP" << std::endl;
-		CONTEXT ctx = { 0 };
-		unsigned char* buf;
-		char asmbuf[128] = { 0 };
-		char hexbuf[128] = { 0 };
-		HANDLE thread = OpenThread(THREAD_GET_CONTEXT | THREAD_SET_CONTEXT, FALSE, tid);
+		//std::cout << "EXCEPTION_SINGLE_STEP " <<  exceptionDebugInfo->ExceptionRecord.ExceptionAddress << std::endl;
+		
+		auto found = this->breakpoints.find(exceptionDebugInfo->ExceptionRecord.ExceptionAddress);
+		thread = OpenThread(THREAD_GET_CONTEXT | THREAD_SET_CONTEXT, FALSE, tid);
 		if (!thread) {
 			break;
 		}
-		
-		if (this->config.baseTracing) {
-			SetTraceFlag(thread);
+		//for (auto bp : this->breakpoints) std::cout << bp.second.address << " "; std::cout << std::endl;
 
+		if (found != this->breakpoints.end() && found->second.type == BreakPointType::TRACING_FUNCTION_BREAKPOINT) {
+			for (auto it = this->threads.begin(); it != this->threads.end(); ++it) {
+				if ((*it) == tid) {
+					HANDLE thr = OpenThread(THREAD_SUSPEND_RESUME, FALSE, tid);
+					SuspendThread(thr);
+					CloseHandle(thr);
+				}
+			}
+
+			RemoveBreakpoint(exceptionDebugInfo->ExceptionRecord.ExceptionAddress);
+
+			std::cout << "Exception breakpoint @ " << exceptionDebugInfo->ExceptionRecord.ExceptionAddress << std::endl;
+			std::cout << "PID: " << std::hex << pid << std::endl;
+			std::cout << "TID: " << std::hex << tid << std::endl;
+			std::cout << "Function name: " << tracing_functions[exceptionDebugInfo->ExceptionRecord.ExceptionAddress].c_str() << std::endl;
+
+			buf = new unsigned char[16];
+			size_t bytesRead = 0;
+			ReadProcessMemory(this->debugProcess, exceptionDebugInfo->ExceptionRecord.ExceptionAddress, buf, 16, nullptr);
+			bytesRead = DisasInstruction(buf, 16, (uint64_t)exceptionDebugInfo->ExceptionRecord.ExceptionAddress, asmbuf, hexbuf);
+			SetBreakpoint((void*)((size_t)(exceptionDebugInfo->ExceptionRecord.ExceptionAddress) + bytesRead), BreakPointType::SAVE_BREAKPOINT);
+			delete[] buf;
+		}
+		else if (found != this->breakpoints.end() && found->second.type == BreakPointType::SAVE_BREAKPOINT) {
+		}
+		
+		if (this->config.tracing) {
+			//ctx.ContextFlags = CONTEXT_ALL;
+			//GetThreadContext(thread, &ctx);
+			//ctx.EFlags |= 0x100;
+			//SetThreadContext(thread, &ctx);
+			SetTraceFlag(thread, false);
+			
+			std::string asmString;
 			buf = new unsigned char[16];
 			ReadProcessMemory(this->debugProcess, exceptionDebugInfo->ExceptionRecord.ExceptionAddress, buf, 16, nullptr);
 			DisasInstruction(buf, 16, (uint64_t)exceptionDebugInfo->ExceptionRecord.ExceptionAddress, asmbuf, hexbuf);
 
-			assembly_string = asmbuf;
-			std::transform(assembly_string.begin(), assembly_string.end(), assembly_string.begin(), ::toupper);
+			asmString = asmbuf;
+			std::transform(asmString.begin(), asmString.end(), asmString.begin(), ::toupper);
 
 
-			if (assembly_string.rfind("CMP", 0) == 0 || assembly_string.rfind("IDIV", 0) == 0) {
-				std::cout << "PID: " << std::hex << pid << " TID: " << tid << std::endl;
+			if (asmString.rfind("CMP", 0) == 0 || asmString.rfind("IDIV", 0) == 0) {
+				//std::cout << "PID: " << std::dec << pid << " TID: " << tid << std::endl;
 				ctx.ContextFlags = CONTEXT_ALL;
 				GetThreadContext(thread, &ctx);
 				debugStream << "INSTRUCTION:" << asmbuf
 					<< "\nADDRESS:0x" << std::hex << exceptionDebugInfo->ExceptionRecord.ExceptionAddress
 					<< "\nTID:" << std::dec << tid << std::endl;
-				PrintRegs(&ctx);
+				PrintRegs(&ctx, false);
 				debugStream << std::endl;
 			}
+			
 		}
 		
-		continueFlag = (DWORD)DBG_CONTINUE;
+		CloseHandle(thread);
 		break;
 	}
 	default:
 	{
 		std::cout << "DBG_EXCEPTION_NOT_HANDLED" << std::endl;
-		//std::cout << "Unhandled exception @ " << exceptionDebugInfo->ExceptionRecord.ExceptionAddress << std::endl;
-		//buf = new char[16];
-		//ReadProcessMemory(this->debugProcess, exceptionDebugInfo->ExceptionRecord.ExceptionAddress, buf, 16, nullptr);
-		//DisasInstruction((unsigned char*)buf, 16, (unsigned int)exceptionDebugInfo->ExceptionRecord.ExceptionAddress, assembly_buffer, hex_buffer);
-		//std::cout << "Instruction: " << assembly_buffer << std::endl;
-		//std::cout << "Exception Code: " << std::hex << exceptionDebugInfo->ExceptionRecord.ExceptionCode << std::endl;
-		//delete[] buf;
-		//CloseHandle(thread);
-		continueFlag = (DWORD)DBG_EXCEPTION_NOT_HANDLED;
+		std::cout << "Unhandled exception @ " << exceptionDebugInfo->ExceptionRecord.ExceptionAddress << std::endl;
+		HANDLE thread = OpenThread(THREAD_GET_CONTEXT | THREAD_SET_CONTEXT, FALSE, tid);
+		if (!thread) {
+			break;
+		}
+		buf = new unsigned char[16];
+		ReadProcessMemory(this->debugProcess, exceptionDebugInfo->ExceptionRecord.ExceptionAddress, buf, 16, nullptr);
+		DisasInstruction(buf, 16, (uint64_t)exceptionDebugInfo->ExceptionRecord.ExceptionAddress, asmbuf, hexbuf);
+		std::cout << "Instruction: " << asmbuf << std::endl;
+		std::cout << "Exception Code: " << std::hex << exceptionDebugInfo->ExceptionRecord.ExceptionCode << std::endl;
+		
+		delete[] buf;
+		CloseHandle(thread);
+		return DBG_EXCEPTION_NOT_HANDLED;
 	}
-	break;
 	}
 
-	return continueFlag;
+	return DBG_EXCEPTION_HANDLED;
 }
 
 void Debugger::SetBreakpoint(void* addr, BreakPointType type) {
@@ -316,59 +388,30 @@ void Debugger::SetBreakpoint(void* addr, BreakPointType type) {
 	this->breakpoints[addr] = BreakPoint{ saveByte, addr, type};
 }
 
-void Debugger::RemoveBreakpoint(void* addr, unsigned int tid, bool ifTrace) {
-	HANDLE thread;
-	CONTEXT ctx;
-
+void Debugger::RemoveBreakpoint(void* addr) {
 	auto found = this->breakpoints.find(addr);
-	if (found == this->breakpoints.end() || found->second.type != BreakPointType::INITIAL_BREAKPOINT) {
+	// if (found == this->breakpoints.end() || found->second.type != BreakPointType::INITIAL_BREAKPOINT)
+	if (found == this->breakpoints.end()) {
 		return;
 	}
-	thread = OpenThread(THREAD_GET_CONTEXT | THREAD_SET_CONTEXT, FALSE, tid);
-	if (!thread) {
-		return;
-	}
-
-	std::memset(&ctx, 0, sizeof(CONTEXT));
-	ctx.ContextFlags = CONTEXT_ALL;
-	GetThreadContext(thread, &ctx);
-	if (ifTrace) ctx.EFlags |= 0x100; //trace flag
-	ctx.EIP--;
-
-	SetThreadContext(thread, &ctx);
 	WriteProcessMemory(this->debugProcess, addr, &found->second.save, 1, nullptr);
 	FlushInstructionCache(this->debugProcess, addr, 1);
 	
 	this->breakpoints.erase(found);
-	CloseHandle(thread);
 }
 
-void Debugger::SetTraceFlag(HANDLE& thread) {
-	CONTEXT ctx;
-	std::memset(&ctx, 0, sizeof(CONTEXT));
-	ctx.ContextFlags = CONTEXT_ALL;
-	GetThreadContext(thread, &ctx);
-	ctx.EFlags |= 0x100;	// trace flag
-	SetThreadContext(thread, &ctx);
-}
-
-void Debugger::SetThreadContextToBreakpoint(HANDLE& thread, PVOID& exception_address, unsigned char saveByte, CONTEXT& _ctx) {
+void Debugger::SetTraceFlag(HANDLE& thr, bool decrementEip) {
 	CONTEXT ctx = { 0 };
 	ctx.ContextFlags = CONTEXT_ALL;
-	//_ctx = ctx;
-	GetThreadContext(thread, &ctx);
-	ctx.EFlags |= 0x100;	//ставим флаг процессора на трассирование
-	ctx.EIP--;				//возвращаемся на инструкцию назад, т.е. в EIP будет адрес текущей инструкции
-
-	//this->restored_adress = (DWORD_PTR*)exception_address;
-	SetThreadContext(thread, &ctx);
-	WriteProcessMemory(this->debugProcess, exception_address, &saveByte, 1, nullptr);
-	FlushInstructionCache(this->debugProcess, exception_address, 1);
+	GetThreadContext(thr, &ctx);
+	ctx.EFlags |= 0x100; //trace flag
+	if (decrementEip) ctx.EIP--;
+	SetThreadContext(thr, &ctx);
 }
 
-void Debugger::PrintRegs(CONTEXT* ctx) {
+void Debugger::PrintRegs(CONTEXT* ctx, bool outConsole) {
 #ifdef _WIN64
-	_debug_stream << "RAX:" << ctx->Rax << "\tRBX:" << ctx->Rbx <<
+	debugStream << "RAX:" << ctx->Rax << "\tRBX:" << ctx->Rbx <<
 		"\tRCX:" << ctx->Rcx << "\tRDX:" << ctx->Rdx <<
 		"\tRSI:" << ctx->Rsi << "\tRDI:" << ctx->Rdi <<
 		"\nRSP:" << ctx->Rsp << "\tRBP:" << ctx->Rbp <<
@@ -378,15 +421,17 @@ void Debugger::PrintRegs(CONTEXT* ctx) {
 		"\tR13:" << ctx->R13 << "\tR14:" << ctx->R14 <<
 		"\tR15:" << ctx->R15 << std::endl;
 
-	std::cout << "RAX:" << ctx->Rax << "\tRBX:" << ctx->Rbx <<
-		"\tRCX:" << ctx->Rcx << "\tRDX:" << ctx->Rdx <<
-		"\tRSI:" << ctx->Rsi << "\tRDI:" << ctx->Rdi <<
-		"\nRSP:" << ctx->Rsp << "\tRBP:" << ctx->Rbp <<
-		"\tRIP:" << ctx->Rip << "\tR8:" << ctx->R8 <<
-		"\tR9:" << ctx->R9 << "\tR10:" << ctx->R10 <<
-		"\nR11:" << ctx->R11 << "\tR12:" << ctx->R12 <<
-		"\tR13:" << ctx->R13 << "\tR14:" << ctx->R14 <<
-		"\tR15:" << ctx->R15 << std::endl;
+	if (outConsole) {
+		std::cout << "RAX:" << ctx->Rax << "\tRBX:" << ctx->Rbx <<
+			"\tRCX:" << ctx->Rcx << "\tRDX:" << ctx->Rdx <<
+			"\tRSI:" << ctx->Rsi << "\tRDI:" << ctx->Rdi <<
+			"\nRSP:" << ctx->Rsp << "\tRBP:" << ctx->Rbp <<
+			"\tRIP:" << ctx->Rip << "\tR8:" << ctx->R8 <<
+			"\tR9:" << ctx->R9 << "\tR10:" << ctx->R10 <<
+			"\nR11:" << ctx->R11 << "\tR12:" << ctx->R12 <<
+			"\tR13:" << ctx->R13 << "\tR14:" << ctx->R14 <<
+			"\tR15:" << ctx->R15 << std::endl;
+	}
 #else
 	debugStream << "EAX:" << std::hex << ctx->Eax <<
 		"\tEBX:" << std::hex << ctx->Ebx <<
@@ -398,14 +443,26 @@ void Debugger::PrintRegs(CONTEXT* ctx) {
 		"\tEBP:" << std::hex << ctx->Ebp <<
 		"\tEIP:" << std::hex << ctx->Eip << std::endl;
 
-	std::cout << "EAX:" << ctx->Eax <<
-		"\tEBX:" << std::hex << ctx->Ebx <<
-		"\tECX:" << std::hex << ctx->Ecx <<
-		"\tEDX:" << std::hex << ctx->Edx <<
-		"\tESI:" << std::hex << ctx->Esi <<
-		"\nEDI:" << std::hex << ctx->Edi <<
-		"\tESP:" << std::hex << ctx->Esp <<
-		"\tEBP:" << std::hex << ctx->Ebp <<
-		"\tEIP:" << std::hex << ctx->Eip << std::endl;
+	if (outConsole) {
+		std::cout << "EAX:" << ctx->Eax <<
+			"\tEBX:" << std::hex << ctx->Ebx <<
+			"\tECX:" << std::hex << ctx->Ecx <<
+			"\tEDX:" << std::hex << ctx->Edx <<
+			"\tESI:" << std::hex << ctx->Esi <<
+			"\nEDI:" << std::hex << ctx->Edi <<
+			"\tESP:" << std::hex << ctx->Esp <<
+			"\tEBP:" << std::hex << ctx->Ebp <<
+			"\tEIP:" << std::hex << ctx->Eip << std::endl;
+	}
 #endif
+}
+
+void Debugger::SetTracingFunctionsBreakpoints(unsigned int tid) {
+	for (const auto& [name, _] : tracing_functions_with_args) {
+		FARPROC address = GetProcAddress(GetModuleHandle(L"Kernel32.dll"), name.c_str());
+		SetBreakpoint((void*)(address), BreakPointType::TRACING_FUNCTION_BREAKPOINT);
+		tracing_functions[address] = name;
+		std::cout << "Found function " << name << " @ " << address << std::endl;
+		std::cout << "Breakpoint set!" << std::endl;
+	}
 }
