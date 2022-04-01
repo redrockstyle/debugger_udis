@@ -362,3 +362,6 @@ MigrationBackup/
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
 /template.exe
+/execute/callfun.exe
+/execute/callfun.c.bak
+/execute/callfun64.exe

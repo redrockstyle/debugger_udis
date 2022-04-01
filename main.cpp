@@ -32,6 +32,12 @@ int main() {
 				else if (wcscmp(sArgs[i], L"-f") == 0) { // func tracing
 					configDbg.functions = 1;
 				}
+				else if (wcscmp(sArgs[i], L"-c") == 0) { // func tracing call -> ret
+					configDbg.functionsCall = 1;
+				}
+				else if (wcscmp(sArgs[i], L"-d") == 0) {
+					configDbg.disas = true;
+				}
 				else if (wcscmp(sArgs[i], L"-l") == 0) { // lib tracing
 					configDbg.libraries = 1;
 				}

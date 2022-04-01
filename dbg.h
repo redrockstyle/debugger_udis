@@ -18,7 +18,11 @@
 #include <fstream>
 #include <vector>
 #include <map>
-
+#include <optional>
+//#include <stack>
+#include <set>
+#include <string>
+#include <list>
 
 #include "disas.h"
 
@@ -27,93 +31,105 @@
 typedef struct _DbgConfig {
 	bool tracing;
 	bool functions;
+	bool functionsCall;
 	bool libraries;
+	bool disas;
 }DbgConfig, * PDbgConfig;
 
 enum class BreakPointType {
-	TRACING_FUNCTION_BREAKPOINT = 0,
-	SAVE_BREAKPOINT,
-	INITIAL_BREAKPOINT,
-	FUNCTION_RETURN_BREAKPOINT,
-	LIB_FUNCTION_BREAKPOINT
+	FUNCTION_POINT = 0,
+	SAVE_POINT,
+	START_POINT,
+	CONTINUE_POINT,
+	END_POINT,
+	RETURN_POINT,
+	LIBRARY_POINT
 };
+
+typedef struct _BeforeInstuction {
+	void* address;
+	unsigned int size;
+} BeforeInstuction, *PBeforeInstuction;
 
 typedef struct _BreakPoint {
 	unsigned char save;
 	void* address;
 	BreakPointType type;
+	struct _BreakPoint* prev;
 } BreakPoint, * PBreakPoint;
 
-typedef struct _LibFunctionBreakpoint {
-	std::wstring lib_name;
+typedef struct _LibFunBreakpoint {
+	std::string lib_name;
 	std::string function_name;
 	void* addr;
-} LibFunctionBreakpoint, *PLibFunctionBreakpoint;
+} LibFunBreakpoint, *PLibFunBreakpoint;
 
-const std::vector<std::string> tracing_functions_ = {
-	"CreateProcessA",
-	"CreateProcessAsUserA",
-	"ExitProcess",
-	"TerminateProcess"
-};
+typedef struct _FunctionCall {
+	std::string name;
+	std::vector<size_t> arguments;
+} FunctionCall;
 
 
-const std::map<std::string, std::vector<std::string>> tracing_functions_with_args = {
+const std::map<std::string, std::vector<std::string>> funWithArgs = {
 	{"CreateProcessA", {
-		"LPCSTR lpApplicationName", //done
-		"LPSTR lpCommandLine", //done
-		"LPSECURITY_ATTRIBUTES lpProcessAttributes", //done
-		"LPSECURITY_ATTRIBUTES lpThreadAttributes", //done
-		"BOOL bInheritHandles", //done
-		"DWORD dwCreationFlags", //done
+		"LPCSTR lpApplicationName",
+		"LPSTR lpCommandLine",
+		"LPSECURITY_ATTRIBUTES lpProcessAttributes",
+		"LPSECURITY_ATTRIBUTES lpThreadAttributes",
+		"BOOL bInheritHandles",
+		"DWORD dwCreationFlags",
 		"LPVOID lpEnvironment",
-		"LPCSTR lpCurrentDirectory", //done
-		"LPSTARTUPINFOA lpStartupInfo", //done
-		"LPPROCESS_INFORMATION lpProcessInformation" //done
+		"LPCSTR lpCurrentDirectory",
+		"LPSTARTUPINFOA lpStartupInfo",
+		"LPPROCESS_INFORMATION lpProcessInformation"
 }},
 	{"CreateProcessW", {
-		"LPCWSTR lpApplicationName", //done
-		"LPWSTR lpCommandLine", //done
-		"LPSECURITY_ATTRIBUTES lpProcessAttributes", //done
-		"LPSECURITY_ATTRIBUTES lpThreadAttributes", //done
-		"BOOL bInheritHandles", //done
-		"DWORD dwCreationFlags", //done
+		"LPCWSTR lpApplicationName",
+		"LPWSTR lpCommandLine",
+		"LPSECURITY_ATTRIBUTES lpProcessAttributes",
+		"LPSECURITY_ATTRIBUTES lpThreadAttributes",
+		"BOOL bInheritHandles",
+		"DWORD dwCreationFlags",
 		"LPVOID lpEnvironment",
-		"LPCWSTR lpCurrentDirectory", //done
-		"LPSTARTUPINFOW lpStartupInfo", //done
-		"LPPROCESS_INFORMATION lpProcessInformation" //done
+		"LPCWSTR lpCurrentDirectory",
+		"LPSTARTUPINFOW lpStartupInfo",
+		"LPPROCESS_INFORMATION lpProcessInformation"
 }},
 	{"CreateProcessAsUserA", {
-		"HANDLE hToken", //done
-		"LPCSTR lpApplicationName", //done
-		"LPSTR lpCommandLine", //done
-		"LPSECURITY_ATTRIBUTES lpProcessAttributes", //done
-		"LPSECURITY_ATTRIBUTES lpThreadAttributes", //done
-		"BOOL bInheritHandles", //done
-		"DWORD dwCreationFlags", //done
+		"HANDLE hToken",
+		"LPCSTR lpApplicationName",
+		"LPSTR lpCommandLine",
+		"LPSECURITY_ATTRIBUTES lpProcessAttributes",
+		"LPSECURITY_ATTRIBUTES lpThreadAttributes",
+		"BOOL bInheritHandles",
+		"DWORD dwCreationFlags",
 		"LPVOID lpEnvironment",
-		"LPCSTR lpCurrentDirectory", //done
-		"LPSTARTUPINFOA lpStartupInfo", //done
-		"LPPROCESS_INFORMATION lpProcessInformation" //done
+		"LPCSTR lpCurrentDirectory",
+		"LPSTARTUPINFOA lpStartupInfo", 
+		"LPPROCESS_INFORMATION lpProcessInformation"
 }},
 	{"ExitProcess", {
-		"UINT uExitCode", //done
+		"UINT uExitCode",
 }},
 	{"TerminateProcess", {
-		"HANDLE hProcess", //done
-		"UINT uExitCode", //done
+		"HANDLE hProcess",
+		"UINT uExitCode",
 }}
 };
 
 class Debugger {
 private:
-	bool debugging;
+	BeforeInstuction before;
+	void* beforeAddress;
+	bool afterRet;
 	struct _DbgConfig config;
 	HANDLE debugProcess;
 	std::vector<DWORD> threads;
 	std::map<void*, BreakPoint> breakpoints;
 	std::map<void*, std::string> dll;
-	std::map<void*, std::string> tracing_functions;
+	std::map<void*, std::string> traceFunctions;
+	std::map<void*, LibFunBreakpoint> libBreakPoints;
+	std::map<void*, FunctionCall> funCalls;
 
 	void EventCreateProcess(DWORD pid, DWORD tid, LPCREATE_PROCESS_DEBUG_INFO procDebugInfo);
 	void EventExitProcess(DWORD pid, DWORD tid, LPEXIT_PROCESS_DEBUG_INFO procDebugInfo);
@@ -121,22 +137,32 @@ private:
 	void EventExitThread(DWORD pid, DWORD tid, LPEXIT_THREAD_DEBUG_INFO threadDebugInfo);
 	void EventLoadDll(DWORD pid, DWORD tid, LPLOAD_DLL_DEBUG_INFO dllDebugInfo);
 	void EventUnloadDll(DWORD pid, DWORD tid, LPUNLOAD_DLL_DEBUG_INFO dllDebugInfo);
-	void EventOutputDebugString(DWORD pid, DWORD tid, LPOUTPUT_DEBUG_STRING_INFO debugStringInfo);
 	DWORD EventException(DWORD pid, DWORD tid, LPEXCEPTION_DEBUG_INFO exceptionDebugInfo);
 
 
-	void SetBreakpoint(void* addr, BreakPointType type);
-	void RemoveBreakpoint(void* addr);
+	void SetBreakpoint(void* addr, BreakPointType type, PBreakPoint prev);
 	void SetTraceFlag(HANDLE& thr, bool decrementEip);
-	
 	void SetTracingFunctionsBreakpoints(unsigned int tid);
+	void SetBreakpointsForDll();
+
+	bool IsNtdllImage(void* address);
 
 	void PrintRegs(CONTEXT* ctx, bool outConsole);
+	void PrintCallInstruction(CONTEXT ctx, void* address, std::string inst);
+	void PrintRetInstruction(CONTEXT ctx, void* address, std::string inst);
+	//void ParseArguments(unsigned int tid, std::string name);
+	//void PrintFunctionCall(std::string name, std::vector<size_t> arguments, size_t result);
+
+	std::string GetStringExceptoin(DWORD except);
+	DWORD GetSizeDllInVirtualMemory(void* dllAddr);
 
 public:
 	std::ofstream debugStream;
+	std::ofstream asmStream;
 	Debugger() {
-		debugging = false;
+		before = { 0 };
+		beforeAddress = nullptr;
+		afterRet = false;
 		debugProcess = nullptr;
 		config = { 0 };
 		debugStream = std::ofstream("debugInfo.txt", std::ios::out);
