@@ -164,6 +164,7 @@
   <ItemGroup>
     <ClInclude Include="dbg.h" />
     <ClInclude Include="disas.h" />
+    <ClInclude Include="names.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

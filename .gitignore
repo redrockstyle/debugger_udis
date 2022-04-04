@@ -365,3 +365,5 @@ FodyWeavers.xsd
 /execute/callfun.exe
 /execute/callfun.c.bak
 /execute/callfun64.exe
+*.exe
+*.txt

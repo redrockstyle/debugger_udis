@@ -32,5 +32,8 @@
     <ClInclude Include="disas.h">
       <Filter>Файлы заголовков</Filter>
     </ClInclude>
+    <ClInclude Include="names.h">
+      <Filter>Файлы заголовков</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>
