@@ -126,9 +126,9 @@ void CallProcessAsUserA(HWND hWnd) {
 	STARTUPINFO si;
 	PROCESS_INFORMATION pi;
 
-	ret = LogonUserW(L"User",
+	ret = LogonUserW(L"user",
 		L"FLEX-PC",
-		L"findet",
+		L"password",
 		LOGON32_LOGON_INTERACTIVE,
 		LOGON32_PROVIDER_DEFAULT,
 		&hUserToken);
@@ -194,9 +194,9 @@ void CallProcessAsUserW(HWND hWnd) {
 	STARTUPINFO si;
 	PROCESS_INFORMATION pi;
 
-	ret = LogonUserW(L"User",
+	ret = LogonUserW(L"user",
 		L"FLEX-PC",
-		L"findet",
+		L"password",
 		LOGON32_LOGON_INTERACTIVE,
 		LOGON32_PROVIDER_DEFAULT,
 		&hUserToken);
