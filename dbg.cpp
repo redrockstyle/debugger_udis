@@ -118,8 +118,13 @@ void Debugger::StartDebugging() {
 			break;
 		}
 		case EXCEPTION_DEBUG_EVENT:
-			if (!attached) attached = true;
-			else continueFlag = EventException(debugEvent.dwProcessId, debugEvent.dwThreadId, &debugEvent.u.Exception);
+			if (this->config.libraries) {
+				continueFlag = EventException(debugEvent.dwProcessId, debugEvent.dwThreadId, &debugEvent.u.Exception);
+			}
+			else {
+				if (!attached) attached = true;
+				else continueFlag = EventException(debugEvent.dwProcessId, debugEvent.dwThreadId, &debugEvent.u.Exception);
+			}
 			break;
 
 		default:
@@ -189,30 +194,31 @@ void Debugger::EventLoadDll(DWORD pid, DWORD tid, LPLOAD_DLL_DEBUG_INFO dllDebug
 	//	}
 	//}
 	
-
 	len = GetFinalPathNameByHandleA(dllDebugInfo->hFile, path, sizeof(path), FILE_NAME_NORMALIZED);
 	for (i = len - 1; path[i] != '\\' && i != 0; --i);
 	std::string dll = std::string(path + i + 1, path + len);
-	std::cout << " \tName:" << dll
+	std::cout << " \tName:" << dll.c_str()
 		<< "\tSize: 0x" << std::hex << GetSizeDllInVirtualMemory(dllDebugInfo->lpBaseOfDll) << std::endl;
-	this->dll[dllDebugInfo->lpBaseOfDll] = dll;
+	this->dll[dllDebugInfo->lpBaseOfDll] = dll.c_str();
 
-	if (this->config.libraries) {
-		IMAGE_DOS_HEADER doshead;
+	if (this->config.libraries
+		//&& dll == "TestLibrary.dll"
+		&& dll != "KernelBase.dll"
+		//&& dll != "msvcrt.dll"
+		) {
+		IMAGE_DOS_HEADER doshead = { 0 };
 		ReadProcessMemory(this->debugProcess, dllDebugInfo->lpBaseOfDll, &doshead, sizeof(IMAGE_DOS_HEADER), nullptr);
 		if (doshead.e_magic != IMAGE_DOS_SIGNATURE) {
-			//printf("No DOS signature\n");
 			return;
 		}
 
-		IMAGE_NT_HEADERS nthead;
+		IMAGE_NT_HEADERS nthead = { 0 };
 		ReadProcessMemory(this->debugProcess, (void*)((size_t)dllDebugInfo->lpBaseOfDll + doshead.e_lfanew), &nthead, sizeof(IMAGE_NT_HEADERS), nullptr);
 		if (nthead.Signature != IMAGE_NT_SIGNATURE || nthead.OptionalHeader.NumberOfRvaAndSizes <= 0) {
-			//printf("No NT signature\n");
 			return;
 		}
 
-		IMAGE_EXPORT_DIRECTORY expdir;
+		IMAGE_EXPORT_DIRECTORY expdir = { 0 };
 		ReadProcessMemory(this->debugProcess, (void*)((size_t)dllDebugInfo->lpBaseOfDll + nthead.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress),
 			&expdir, sizeof(IMAGE_EXPORT_DIRECTORY), nullptr);
 
@@ -228,15 +234,14 @@ void Debugger::EventLoadDll(DWORD pid, DWORD tid, LPLOAD_DLL_DEBUG_INFO dllDebug
 		ReadProcessMemory(this->debugProcess, (LPCVOID)((size_t)base + expdir.AddressOfFunctions), funcBuffer, expdir.NumberOfFunctions * sizeof(DWORD), nullptr);
 		ReadProcessMemory(this->debugProcess, (LPCVOID)((size_t)base + expdir.AddressOfNames), nameBuffer, expdir.NumberOfNames * sizeof(DWORD), nullptr);
 
-		//_tprintf(L"Library: %s\n", libname.c_str());
 		for (size_t i = 0; i < expdir.NumberOfNames; ++i) {
 			char s[128] = { 0 };
 
 			ReadProcessMemory(this->debugProcess, (LPCVOID)((size_t)base + nameBuffer[i]), s, 128, nullptr);
 			auto funcAddr = (void*)((size_t)base + funcBuffer[ordBuffer[i]]);
 
-			//printf("  Export:\t%s\t\t%p\n", s, funcAddr);
-			SetBreakpoint(funcAddr, BreakPointType::FUNCTION_POINT, nullptr);
+			std::cout << std::left << std::setw(50) << s << "\t0x" << funcAddr << std::endl;
+			SetBreakpoint(funcAddr, BreakPointType::LIBRARY_POINT, nullptr);
 			this->libBreakpoints[funcAddr] = LibFunBreakpoint{ dll, s, funcAddr };
 		}
 
@@ -254,9 +259,9 @@ void Debugger::EventUnloadDll(DWORD pid, DWORD tid, LPUNLOAD_DLL_DEBUG_INFO dllD
 	std::cout << "\tTID:" << std::dec << tid << std::endl;
 
 	if (this->config.libraries) {
-		for (const auto bp : libBreakpoints) {
+		for (const auto& bp : libBreakpoints) {
 			if (bp.second.libName == this->dll[dllDebugInfo->lpBaseOfDll]) {
-				auto b = this->breakpoints[bp.second.addr];
+				const auto& b = this->breakpoints[bp.second.addr];
 				WriteProcessMemory(this->debugProcess, b.address, &b.save, 1, nullptr);
 				FlushInstructionCache(this->debugProcess, b.address, 1);
 				this->breakpoints.erase(bp.second.addr);
@@ -287,7 +292,7 @@ DWORD Debugger::EventException(DWORD pid, DWORD tid, LPEXCEPTION_DEBUG_INFO exce
 	case STATUS_WX86_BREAKPOINT:
 #endif
 	{
-		std::cout << "EXCEPTION_BREAKPOINT " << exceptionDebugInfo->ExceptionRecord.ExceptionAddress << std::endl;
+		//std::cout << "EXCEPTION_BREAKPOINT " << exceptionDebugInfo->ExceptionRecord.ExceptionAddress << std::endl;
 		auto found = this->breakpoints.find(exceptionDebugInfo->ExceptionRecord.ExceptionAddress);
 		
 		if (found != this->breakpoints.end() && found->second.type == BreakPointType::START_POINT) {
@@ -323,11 +328,6 @@ DWORD Debugger::EventException(DWORD pid, DWORD tid, LPEXCEPTION_DEBUG_INFO exce
 					<< std::setw(10) << before.address << std::endl;
 			}
 		}
-		//else if (found != this->breakpoints.end() && found->second.type == BreakPointType::END_POINT) {
-		//	WriteProcessMemory(this->debugProcess, (PVOID)exceptionDebugInfo->ExceptionRecord.ExceptionAddress, &found->second.save, 1, nullptr);
-		//	FlushInstructionCache(this->debugProcess, (PVOID)exceptionDebugInfo->ExceptionRecord.ExceptionAddress, 1);
-		//	this->breakpoints.erase(found);
-		//}
 		else if (found != this->breakpoints.end() && found->second.type == BreakPointType::FUNCTION_POINT) {
 			std::cout << "BREAKPOINT FUNCTION:" << std::hex << exceptionDebugInfo->ExceptionRecord.ExceptionAddress
 				<< "\tPID:" << std::dec << pid
@@ -345,35 +345,27 @@ DWORD Debugger::EventException(DWORD pid, DWORD tid, LPEXCEPTION_DEBUG_INFO exce
 			bytesRead = DisasInstruction(buf, 16, (unsigned int)exceptionDebugInfo->ExceptionRecord.ExceptionAddress, asmbuf, hexbuf);
 			SetBreakpoint((void*)((size_t)exceptionDebugInfo->ExceptionRecord.ExceptionAddress + bytesRead), BreakPointType::SAVE_POINT, &found->second);
 		}
-		//else if (found != this->breakpoints.end() && found->second.type == BreakPointType::LIBRARY_POINT) {
-		//	std::cout << "\nPID: " << std::dec << pid << "\tTID: " << std::dec << tid
-		//		<< "\t\t" << this->libBreakpoints[exceptionDebugInfo->ExceptionRecord.ExceptionAddress].libName.c_str()
-		//		<< "\nFunction: " << this->libBreakpoints[exceptionDebugInfo->ExceptionRecord.ExceptionAddress].funcName.c_str()
-		//		<< "\t0x" << exceptionDebugInfo->ExceptionRecord.ExceptionAddress << std::endl;
-		//	
-		//	for (auto it = this->threads.begin(); it != this->threads.end(); ++it) {
-		//		if ((*it) != tid) {
-		//			HANDLE thr = OpenThread(THREAD_SUSPEND_RESUME, FALSE, tid);
-		//			SuspendThread(thr);
-		//			CloseHandle(thr);
-		//		}
-		//	}
+		else if (found != this->breakpoints.end() && found->second.type == BreakPointType::LIBRARY_POINT) {
+			
+			std::cout << "\nPID: " << std::dec << pid << "\tTID: " << std::dec << tid
+				<< "\t\t" << this->libBreakpoints[exceptionDebugInfo->ExceptionRecord.ExceptionAddress].libName
+				<< "\nFunction: " << this->libBreakpoints[exceptionDebugInfo->ExceptionRecord.ExceptionAddress].funcName
+				<< "\t0x" << exceptionDebugInfo->ExceptionRecord.ExceptionAddress << std::endl;
 
-		//	SetTraceFlag(thread, true);
-		//	WriteProcessMemory(this->debugProcess, (PVOID)exceptionDebugInfo->ExceptionRecord.ExceptionAddress, &found->second.save, 1, nullptr);
-		//	FlushInstructionCache(this->debugProcess, (PVOID)exceptionDebugInfo->ExceptionRecord.ExceptionAddress, 1);
+			SetTraceFlag(thread, true);
+			WriteProcessMemory(this->debugProcess, exceptionDebugInfo->ExceptionRecord.ExceptionAddress, &found->second.save, 1, nullptr);
+			FlushInstructionCache(this->debugProcess, exceptionDebugInfo->ExceptionRecord.ExceptionAddress, 1);
 
-		//	
-		//	size_t bytesRead = 0;
-		//	ReadProcessMemory(this->debugProcess, exceptionDebugInfo->ExceptionRecord.ExceptionAddress, buf, 16, nullptr);
-		//	bytesRead = DisasInstruction(buf, 16, (size_t)exceptionDebugInfo->ExceptionRecord.ExceptionAddress, asmbuf, hexbuf);
-		//	SetBreakpoint((void*)((size_t)(exceptionDebugInfo->ExceptionRecord.ExceptionAddress) + bytesRead), BreakPointType::SAVE_POINT, &found->second);
-		//}
-		else if (found != this->breakpoints.end() && found->second.type == BreakPointType::FUNRET_POINT) {
+			size_t bytesRead = 0;
+			ReadProcessMemory(this->debugProcess, exceptionDebugInfo->ExceptionRecord.ExceptionAddress, buf, 16, nullptr);
+			bytesRead = DisasInstruction(buf, 16, (unsigned int)exceptionDebugInfo->ExceptionRecord.ExceptionAddress, asmbuf, hexbuf);
+			SetBreakpoint((void*)((size_t)(exceptionDebugInfo->ExceptionRecord.ExceptionAddress) + bytesRead), BreakPointType::SAVE_POINT, &found->second);
+		}
+		else if (found != this->breakpoints.end() && found->second.type == BreakPointType::RETURN_POINT) {
 			//std::cout << "FUNRET" << std::endl;
 			SetTraceFlag(thread, true);
-			WriteProcessMemory(this->debugProcess, (PVOID)exceptionDebugInfo->ExceptionRecord.ExceptionAddress, &found->second.save, 1, nullptr);
-			FlushInstructionCache(this->debugProcess, (PVOID)exceptionDebugInfo->ExceptionRecord.ExceptionAddress, 1);
+			WriteProcessMemory(this->debugProcess, exceptionDebugInfo->ExceptionRecord.ExceptionAddress, &found->second.save, 1, nullptr);
+			FlushInstructionCache(this->debugProcess, exceptionDebugInfo->ExceptionRecord.ExceptionAddress, 1);
 			PrintFunctionCall(this->funCalls[exceptionDebugInfo->ExceptionRecord.ExceptionAddress].name,
 				this->funCalls[exceptionDebugInfo->ExceptionRecord.ExceptionAddress].arguments, (size_t)ctx.EAX, TypeParse::func);
 		}
@@ -384,8 +376,8 @@ DWORD Debugger::EventException(DWORD pid, DWORD tid, LPEXCEPTION_DEBUG_INFO exce
 			WriteProcessMemory(this->debugProcess, found->second.prev->address, "\xCC", 1, nullptr);
 			FlushInstructionCache(this->debugProcess, found->second.prev->address, 1);
 
-			WriteProcessMemory(this->debugProcess, (PVOID)exceptionDebugInfo->ExceptionRecord.ExceptionAddress, &found->second.save, 1, nullptr);
-			FlushInstructionCache(this->debugProcess, (PVOID)exceptionDebugInfo->ExceptionRecord.ExceptionAddress, 1);
+			WriteProcessMemory(this->debugProcess, exceptionDebugInfo->ExceptionRecord.ExceptionAddress, &found->second.save, 1, nullptr);
+			FlushInstructionCache(this->debugProcess, exceptionDebugInfo->ExceptionRecord.ExceptionAddress, 1);
 
 			this->breakpoints.erase(found);
 
@@ -429,7 +421,6 @@ DWORD Debugger::EventException(DWORD pid, DWORD tid, LPEXCEPTION_DEBUG_INFO exce
 			asmstr = asmbuf;
 			std::transform(asmstr.begin(), asmstr.end(), asmstr.begin(), ::toupper);
 		}
-
 		if (this->config.tracing) {
 			if (asmstr.rfind("DIV", 0) == 0 || asmstr.rfind("IDIV", 0) == 0) {
 				ctx.ContextFlags = CONTEXT_ALL;
@@ -447,20 +438,20 @@ DWORD Debugger::EventException(DWORD pid, DWORD tid, LPEXCEPTION_DEBUG_INFO exce
 		}
 		if (this->config.functionsCall){
 			if (this->afterRet) {
-				ctx.ContextFlags = CONTEXT_ALL;
-				GetThreadContext(thread, &ctx);
-				std::cout << "RET\tRET_ADDR:" << (size_t)exceptionDebugInfo->ExceptionRecord.ExceptionAddress
-					<< "\tRET_VALUE:" << (size_t)ctx.EAX << std::endl;
+				//ctx.ContextFlags = CONTEXT_ALL;
+				//GetThreadContext(thread, &ctx);
+				//std::cout << "RET\tRET_ADDR:" << (size_t)exceptionDebugInfo->ExceptionRecord.ExceptionAddress
+				//	<< "\tRET_VALUE:" << (size_t)ctx.EAX << std::endl;
 				this->afterRet = false;
 			}
 
 			if (asmstr.rfind("CALL", 0) == 0) {
 				ctx.ContextFlags = CONTEXT_ALL;
 				GetThreadContext(thread, &ctx);
+				PrintInstCall(ctx,(void*)((size_t)exceptionDebugInfo->ExceptionRecord.ExceptionAddress + before.size), (void*)exceptionDebugInfo->ExceptionRecord.ExceptionAddress, asmstr);
 				//std::cout << "INSTRUCTION:" << asmbuf
 				//	<< "\nADDRESS:0x" << std::hex << exceptionDebugInfo->ExceptionRecord.ExceptionAddress
 				//	<< "\nTID:" << std::dec << tid << std::endl;
-				PrintCallInstruction(ctx, (void*)exceptionDebugInfo->ExceptionRecord.ExceptionAddress, asmstr);
 			}
 			if (asmstr.rfind("RET", 0) == 0) {
 				this->afterRet = true;
@@ -469,7 +460,7 @@ DWORD Debugger::EventException(DWORD pid, DWORD tid, LPEXCEPTION_DEBUG_INFO exce
 				//	<< "\nTID:" << std::dec << tid << std::endl;
 				ctx.ContextFlags = CONTEXT_ALL;
 				GetThreadContext(thread, &ctx);
-				PrintRetInstruction(ctx, (void*)exceptionDebugInfo->ExceptionRecord.ExceptionAddress, asmstr);
+				PrintInstRet(ctx, (void*)exceptionDebugInfo->ExceptionRecord.ExceptionAddress, asmstr);
 			}
 		}
 		if (this->config.disas) {
@@ -629,9 +620,9 @@ std::string Debugger::GetStringExceptoin(DWORD except) {
 	}
 }
 
-void Debugger::PrintCallInstruction(CONTEXT ctx, void* address, std::string inst) {
+void Debugger::PrintInstCall(CONTEXT ctx, void* retAddr, void* address, std::string inst) {
 	const size_t argcount = 6;
-	std::cout << inst.c_str() << "\t" << address << std::endl;
+	std::cout << inst.c_str() << "\tCALL_ADDR:" << address << "\tRET_ADDR:" << retAddr << std::endl;
 
 	std::vector<size_t> args;
 #ifdef _AMD64_
@@ -673,8 +664,8 @@ void Debugger::PrintCallInstruction(CONTEXT ctx, void* address, std::string inst
 	}
 }
 
-void Debugger::PrintRetInstruction(CONTEXT ctx, void* addr, std::string inst) {
-	size_t retaddr;
+void Debugger::PrintInstRet(CONTEXT ctx, void* addr, std::string inst) {
+	size_t retaddr = 0;
 	ReadProcessMemory(this->debugProcess, (LPCVOID)(ctx.ESP), &retaddr, sizeof(size_t), nullptr);
 	std::cout << inst.c_str()
 		<< "\tRET_ADDR:" << retaddr
@@ -684,7 +675,7 @@ void Debugger::PrintRetInstruction(CONTEXT ctx, void* addr, std::string inst) {
 
 DWORD Debugger::GetSizeDllInVirtualMemory(void* dllAddr) {
 
-	IMAGE_DOS_HEADER doshead;
+	IMAGE_DOS_HEADER doshead = { 0 };
 	ReadProcessMemory(this->debugProcess,
 		dllAddr,
 		&doshead,
@@ -694,7 +685,7 @@ DWORD Debugger::GetSizeDllInVirtualMemory(void* dllAddr) {
 		return NULL;
 	}
 
-	IMAGE_NT_HEADERS nthead;
+	IMAGE_NT_HEADERS nthead = { 0 };
 	ReadProcessMemory(this->debugProcess,
 		(void*)((size_t)dllAddr + doshead.e_lfanew),
 		&nthead,
@@ -709,7 +700,7 @@ DWORD Debugger::GetSizeDllInVirtualMemory(void* dllAddr) {
 
 bool Debugger::IsNtdllImage(void* address) {
 
-	for (const auto dll : this->dll) {
+	for (const auto& dll : this->dll) {
 		//std::cout << "DLL: " << dll.first << " " << dll.second << " \tEIP: " << address << std::endl;
 		if ((size_t)dll.first <= (size_t)address && ((size_t)dll.first + GetSizeDllInVirtualMemory(dll.first)) >= (size_t)address) {
 			return true;
@@ -765,7 +756,10 @@ void Debugger::ParseArguments(HANDLE& thread, std::string name) {
 	}
 #endif
 	this->funCalls[(void*)returnAddress] = FunctionCall{ name, args };
-	SetBreakpoint((void*)returnAddress, BreakPointType::FUNRET_POINT, nullptr);
+	if (this->funCalls[(void*)returnAddress].name == "ExitProcess") {
+		PrintFunctionCall(this->funCalls[(void*)returnAddress].name, this->funCalls[(void*)returnAddress].arguments, 0, TypeParse::func);
+	}
+	SetBreakpoint((void*)returnAddress, BreakPointType::RETURN_POINT, nullptr);
 }
 
 void Debugger::PrintFunctionCall(std::string name, std::vector<size_t> arguments, size_t result, TypeParse tp) {
@@ -779,9 +773,11 @@ void Debugger::PrintFunctionCall(std::string name, std::vector<size_t> arguments
 	{
 	case TypeParse::func:
 	{
-		funcStream << name << std::endl;
+		funcStream << std::left << std::setw(20) << name;
 		const auto& [fn, fa] = *funsWithArgs.find(name);
 		funName = fn;
+		if (funName != "ExitProcess") funcStream << "return:" << result;
+		funcStream << '\n';
 		funArgs = fa;
 		offsetChar = ' ';
 		break;
@@ -841,23 +837,23 @@ void Debugger::PrintFunctionCall(std::string name, std::vector<size_t> arguments
 				switch (treating) {
 				case TypeArgumnet::boolt:
 				{
-					if (arguments[i]) funcStream << "TRUE";
-					else funcStream << "FALSE";
+					if (arguments[i]) funcStream << "TRUE" << '\n';
+					else funcStream << "FALSE" << '\n';
 					break;
 				}
 				case TypeArgumnet::ushort:
 				{
-					funcStream << std::dec << (unsigned short)arguments[i];
+					funcStream << std::dec << (unsigned short)arguments[i] << '\n';
 					break;
 				}
 				case TypeArgumnet::dec:
 				{
-					funcStream << std::dec << arguments[i];
+					funcStream << std::dec << arguments[i] << '\n';
 					break;
 				}
 				case TypeArgumnet::pointer:
 				{
-					funcStream << std::hex << arguments[i];
+					funcStream << std::hex << arguments[i] << '\n';
 					break;
 				}
 				case TypeArgumnet::dw:
@@ -882,26 +878,34 @@ void Debugger::PrintFunctionCall(std::string name, std::vector<size_t> arguments
 						if (flags & 0x00000008) str += "DETACHED_PROCESS ";
 						if (flags & 0x00080000) str += "EXTENDED_STARTUPINFO_PRESENT ";
 						if (flags & 0x00010000) str += "INHERIT_PARENT_AFFINITY";
-						funcStream << str;
+						funcStream << str << '\n';
 						break;
 					}
 					else {
-						funcStream << std::dec << arguments[i];
+						funcStream << std::dec << arguments[i] << '\n';
 					}
 					break;
 				}
 				case TypeArgumnet::hex:
 				{
-					funcStream << std::hex << "0x" << arguments[i];
+					funcStream << std::hex << "0x" << arguments[i] << '\n';
 					break;
 				}
 				case TypeArgumnet::infoProc:
 				{
-					size_t argsa;
+					size_t argsa = 0;
 					std::vector<size_t> args;
+					size_t addressStruct = arguments[i];
 					const auto sizeii = argPI.at(typeWithName[0]).size();
 					for (size_t isa = 0; isa < sizeii; ++isa) {
-						ReadProcessMemory(this->debugProcess, (void*)((size_t*)arguments[i] + isa), &argsa, sizeof(size_t), nullptr);
+						if (isa == 0 || isa == 1) {
+							ReadProcessMemory(this->debugProcess, (void*)(addressStruct), &argsa, sizeof(size_t), nullptr);
+							addressStruct += sizeof(size_t);
+						}
+						else {
+							ReadProcessMemory(this->debugProcess, (void*)(addressStruct), &argsa, sizeof(unsigned int), nullptr);
+							addressStruct += sizeof(unsigned int);
+						}
 						args.push_back(argsa);
 					}
 					funcStream << std::endl;
@@ -910,7 +914,7 @@ void Debugger::PrintFunctionCall(std::string name, std::vector<size_t> arguments
 				}
 				case TypeArgumnet::secAtributes:
 				{
-					size_t argsa;
+					size_t argsa = 0;
 					std::vector<size_t> args;
 					const auto sizeii = argSecAtr.at(typeWithName[0]).size();
 					for (size_t isa = 0; isa < sizeii; ++isa) {
@@ -923,7 +927,7 @@ void Debugger::PrintFunctionCall(std::string name, std::vector<size_t> arguments
 				}
 				case TypeArgumnet::startProcInfoA:
 				{
-					size_t argsa;
+					unsigned int argsa = 0;
 					std::vector<size_t> args;
 					size_t addressStruct = arguments[i];
 					const auto sizeii = argSIa.at(typeWithName[0]).size();
@@ -933,8 +937,8 @@ void Debugger::PrintFunctionCall(std::string name, std::vector<size_t> arguments
 							addressStruct += sizeof(unsigned short);
 						}
 						else {
-							ReadProcessMemory(this->debugProcess, (void*)(addressStruct), &argsa, sizeof(size_t), nullptr);
-							addressStruct += sizeof(size_t);
+							ReadProcessMemory(this->debugProcess, (void*)(addressStruct), &argsa, sizeof(unsigned int), nullptr);
+							addressStruct += sizeof(unsigned int);
 						}
 						args.push_back(argsa);
 					}
@@ -944,7 +948,7 @@ void Debugger::PrintFunctionCall(std::string name, std::vector<size_t> arguments
 				}
 				case TypeArgumnet::startProcInfoW:
 				{
-					size_t argsa;
+					size_t argsa = 0;
 					std::vector<size_t> args;
 					size_t addressStruct = arguments[i];
 					const auto sizeii = argSIw.at(typeWithName[0]).size();
@@ -966,34 +970,36 @@ void Debugger::PrintFunctionCall(std::string name, std::vector<size_t> arguments
 				case TypeArgumnet::str:
 				{
 					size_t max = 0;
-					char sym;
+					char sym = 0;
 					std::string str;
 					do {
 						ReadProcessMemory(this->debugProcess, (void*)((char*)arguments[i] + max++), &sym, sizeof(char), nullptr);
 						if (sym == '\0') break;
 						str.push_back(sym);
 					} while (max < MAX_PATH);
-					funcStream << str;
+					funcStream << str << '\n';
 					break;
 				}
 				case TypeArgumnet::wstr:
 				{
 					size_t max = 0;
-					wchar_t sym;
+					wchar_t sym = 0;
 					std::wstring wstr;
 					do {
 						ReadProcessMemory(this->debugProcess, (void*)((wchar_t*)arguments[i] + max++), &sym, sizeof(wchar_t), nullptr);
 						if (sym == '\0') break;
 						wstr.push_back(sym);
 					} while (max < MAX_PATH);
-					funcStream << std::string(wstr.begin(), wstr.end());
+					std::string str(wstr.length(), 0);
+					std::transform(wstr.begin(), wstr.end(), str.begin(), [](wchar_t c) { return (char)c; });
+					funcStream << str << '\n';
 					break;
 				}
 				default:
 					funcStream << "is\t" << "???\n";
 					break;
 				}
-				funcStream << '\n';
+				//funcStream << '\n';
 			}
 			else funcStream << "NULL\n";
 		}

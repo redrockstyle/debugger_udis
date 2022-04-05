@@ -41,9 +41,9 @@ enum class BreakPointType {
 	SAVE_POINT,
 	START_POINT,
 	CONTINUE_POINT,
-	END_POINT,
-	FUNRET_POINT,
-	LIBRARY_POINT
+	RETURN_POINT,
+	LIBRARY_POINT,
+	CALL_POINT
 };
 
 typedef struct _BeforeInstuction {
@@ -68,8 +68,6 @@ typedef struct _FunctionCall {
 	std::string name;
 	std::vector<size_t> arguments;
 } FunctionCall;
-
-
 
 class Debugger {
 private:
@@ -101,8 +99,8 @@ private:
 	bool IsNtdllImage(void* address);
 
 	void PrintRegs(CONTEXT* ctx, bool outConsole);
-	void PrintCallInstruction(CONTEXT ctx, void* address, std::string inst);
-	void PrintRetInstruction(CONTEXT ctx, void* address, std::string inst);
+	void PrintInstCall(CONTEXT ctx, void* retAddr, void* address, std::string inst);
+	void PrintInstRet(CONTEXT ctx, void* address, std::string inst);
 	void ParseArguments(HANDLE& thread, std::string name);
 	void PrintFunctionCall(std::string name, std::vector<size_t> arguments, size_t result, TypeParse tp);
 	std::string GetStringExceptoin(DWORD except);
