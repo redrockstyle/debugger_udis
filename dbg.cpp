@@ -900,15 +900,8 @@ void Debugger::PrintFunctionCall(std::string name, std::vector<size_t> arguments
 					size_t argsa;
 					std::vector<size_t> args;
 					const auto sizeii = argPI.at(typeWithName[0]).size();
-					std::cout << "infoProc ";
-					PROCESS_INFORMATION pis = { 0 };
-					ReadProcessMemory(this->debugProcess, (void*)arguments[i], &pis, sizeof(PROCESS_INFORMATION), nullptr);
-					std::cout << pis.dwProcessId << " " << pis.dwThreadId << " " << sizeof(PROCESS_INFORMATION) << std::endl;
-					std::cout << (size_t)(*((size_t *)&pis)) << std::endl;
-
 					for (size_t isa = 0; isa < sizeii; ++isa) {
-						ReadProcessMemory(this->debugProcess, (void*)(arguments[i] + isa), &argsa, sizeof(size_t), nullptr);
-						std::cout << argsa << std::endl;
+						ReadProcessMemory(this->debugProcess, (void*)((size_t*)arguments[i] + isa), &argsa, sizeof(size_t), nullptr);
 						args.push_back(argsa);
 					}
 					funcStream << std::endl;
@@ -920,9 +913,8 @@ void Debugger::PrintFunctionCall(std::string name, std::vector<size_t> arguments
 					size_t argsa;
 					std::vector<size_t> args;
 					const auto sizeii = argSecAtr.at(typeWithName[0]).size();
-					std::cout << "secAtributes" << std::endl;
 					for (size_t isa = 0; isa < sizeii; ++isa) {
-						ReadProcessMemory(this->debugProcess, (void*)((size_t)arguments[i] + isa), &argsa, sizeof(size_t), nullptr);
+						ReadProcessMemory(this->debugProcess, (void*)((size_t*)arguments[i] + isa), &argsa, sizeof(size_t), nullptr);
 						args.push_back(argsa);
 					}
 					funcStream << std::endl;
@@ -933,10 +925,17 @@ void Debugger::PrintFunctionCall(std::string name, std::vector<size_t> arguments
 				{
 					size_t argsa;
 					std::vector<size_t> args;
+					size_t addressStruct = arguments[i];
 					const auto sizeii = argSIa.at(typeWithName[0]).size();
-					std::cout << "startProcInfoA" << std::endl;
 					for (size_t isa = 0; isa < sizeii; ++isa) {
-						ReadProcessMemory(this->debugProcess, (void*)((size_t)arguments[i] + isa), &argsa, sizeof(size_t), nullptr);
+						if (isa == 12 || isa == 13) {
+							ReadProcessMemory(this->debugProcess, (void*)(addressStruct), &argsa, sizeof(unsigned short), nullptr);
+							addressStruct += sizeof(unsigned short);
+						}
+						else {
+							ReadProcessMemory(this->debugProcess, (void*)(addressStruct), &argsa, sizeof(size_t), nullptr);
+							addressStruct += sizeof(size_t);
+						}
 						args.push_back(argsa);
 					}
 					funcStream << std::endl;
@@ -947,10 +946,17 @@ void Debugger::PrintFunctionCall(std::string name, std::vector<size_t> arguments
 				{
 					size_t argsa;
 					std::vector<size_t> args;
+					size_t addressStruct = arguments[i];
 					const auto sizeii = argSIw.at(typeWithName[0]).size();
-					std::cout << "startProcInfoW" << std::endl;
 					for (size_t isa = 0; isa < sizeii; ++isa) {
-						ReadProcessMemory(this->debugProcess, (void*)((size_t)arguments[i] + isa), &argsa, sizeof(size_t), nullptr);
+						if (isa == 12 || isa == 13) {
+							ReadProcessMemory(this->debugProcess, (void*)(addressStruct), &argsa, sizeof(unsigned short), nullptr);
+							addressStruct += sizeof(unsigned short);
+						}
+						else {
+							ReadProcessMemory(this->debugProcess, (void*)(addressStruct), &argsa, sizeof(size_t), nullptr);
+							addressStruct += sizeof(size_t);
+						}
 						args.push_back(argsa);
 					}
 					funcStream << std::endl;
