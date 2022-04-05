@@ -118,13 +118,10 @@ void Debugger::StartDebugging() {
 			break;
 		}
 		case EXCEPTION_DEBUG_EVENT:
-			if (this->config.libraries) {
-				continueFlag = EventException(debugEvent.dwProcessId, debugEvent.dwThreadId, &debugEvent.u.Exception);
-			}
-			else {
-				if (!attached) attached = true;
-				else continueFlag = EventException(debugEvent.dwProcessId, debugEvent.dwThreadId, &debugEvent.u.Exception);
-			}
+			if (this->config.libraries) attached = true;
+			if (!attached) attached = true;
+			else continueFlag = EventException(debugEvent.dwProcessId, debugEvent.dwThreadId, &debugEvent.u.Exception);
+
 			break;
 
 		default:
